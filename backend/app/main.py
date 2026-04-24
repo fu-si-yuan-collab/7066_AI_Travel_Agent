@@ -14,8 +14,13 @@ from app.api.routes import chat, trips, users, preferences
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """应用生命周期管理：启动时初始化数据库表，关闭时清理资源。"""
-    await init_db()  # 自动建表（开发便利，生产环境应使用 alembic 迁移）
+    """应用生命周期管理：启动时初始化数据库表，连接失败时打印警告但不阻止启动。"""
+    try:
+        await init_db()
+    except Exception as e:
+        # 数据库暂时不可用时不阻止服务启动（Railway 插件可能需要几秒才就绪）
+        import logging
+        logging.warning(f"DB init warning (will retry on first request): {e}")
     yield
 
 
