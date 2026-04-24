@@ -22,7 +22,7 @@ interface AppStore {
   setPreferences: (p: UserPreference) => void
 
   // Active tab
-  activeTab: 'chat' | 'trips' | 'hotels' | 'preferences'
+  activeTab: 'chat' | 'trips' | 'hotels' | 'preferences' | 'docs'
   setActiveTab: (t: AppStore['activeTab']) => void
 }
 

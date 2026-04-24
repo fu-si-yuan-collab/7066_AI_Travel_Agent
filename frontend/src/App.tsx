@@ -7,6 +7,7 @@ import TripsPanel from './components/TripsPanel'
 import HotelsPanel from './components/HotelsPanel'
 import PreferencesPanel from './components/PreferencesPanel'
 import RightPanel from './components/RightPanel'
+import DocsPage from './components/DocsPage'
 
 function MainContent() {
   const activeTab = useStore((s) => s.activeTab)
@@ -16,6 +17,7 @@ function MainContent() {
       {activeTab === 'trips' && <TripsPanel />}
       {activeTab === 'hotels' && <HotelsPanel />}
       {activeTab === 'preferences' && <PreferencesPanel />}
+      {activeTab === 'docs' && <DocsPage />}
     </div>
   )
 }

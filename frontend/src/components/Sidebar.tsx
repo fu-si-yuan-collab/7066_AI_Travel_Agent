@@ -1,4 +1,4 @@
-import { MessageSquare, Map, Hotel, Settings, LogOut, Plane, Compass } from 'lucide-react'
+import { MessageSquare, Map, Hotel, Settings, LogOut, Plane, Compass, BookOpen } from 'lucide-react'
 import { useStore } from '../store'
 
 const navItems = [
@@ -6,6 +6,7 @@ const navItems = [
   { id: 'trips', icon: Map, label: 'My Trips' },
   { id: 'hotels', icon: Hotel, label: 'Hotels' },
   { id: 'preferences', icon: Settings, label: 'Preferences' },
+  { id: 'docs', icon: BookOpen, label: 'Documentation' },
 ] as const
 
 export default function Sidebar() {
