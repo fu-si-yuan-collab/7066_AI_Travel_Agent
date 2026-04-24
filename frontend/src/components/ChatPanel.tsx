@@ -141,16 +141,20 @@ function normalizeTripJSON(obj: Record<string, unknown>): TripJSON | null {
   const exampleHotels = rawHotels.map(h => {
     const platforms = (h.booking_platforms ?? h.platforms ?? {}) as Record<string, number>
     const firstPlatform = Object.keys(platforms)[0] ?? 'Booking.com'
-    const priceFromPlatforms = Object.values(platforms)[0] ?? 0
+    const priceFromPlatforms = Object.values(platforms).find(v => Number(v) > 0) ?? 0
+    const price = Number(
+      h.price_per_night_cny ?? h.average_price_per_night_cny ??
+      h.price_per_night ?? h.price ?? h.rate ?? priceFromPlatforms
+    )
     return {
       name: (h.name ?? h.hotel_name ?? '') as string,
-      area: (h.area ?? h.location ?? '') as string,
+      area: (h.area ?? h.location ?? h.district ?? '') as string,
       stars: Number(h.stars ?? h.star_rating ?? h.hotel_class ?? 3),
-      price_per_night_cny: Number(h.price_per_night_cny ?? h.average_price_per_night_cny ?? h.price ?? priceFromPlatforms),
+      price_per_night_cny: isNaN(price) ? 0 : price,
       platform: (h.platform ?? firstPlatform) as string,
-      highlights: (h.highlights ?? h.description ?? '') as string,
+      highlights: (h.highlights ?? h.description ?? h.features ?? '') as string,
     }
-  })
+  }).filter(h => h.name)  // remove empty entries
 
   // ── Restaurants ────────────────────────────────────────────────────────────
   type RestRaw = Record<string, unknown>
@@ -174,11 +178,13 @@ function normalizeTripJSON(obj: Record<string, unknown>): TripJSON | null {
     food: 'meals', dining: 'meals', restaurants: 'meals',
     activities_transport: 'activities', sightseeing: 'activities',
     transportation: 'local_transport', transit: 'local_transport',
+    // ignore summary fields — don't render them as budget segments
+    total_spent: '_skip', budget_remain: '_skip', remaining: '_skip',
   }
   const normalizedBudget: BudgetRaw = {}
   for (const [k, v] of Object.entries(rawBudget)) {
     const key = KEY_MAP[k] ?? k
-    normalizedBudget[key] = v
+    if (key !== '_skip') normalizedBudget[key] = v
   }
 
   // ── Weather ────────────────────────────────────────────────────────────────
@@ -493,8 +499,14 @@ function HotelCards({ hotels }: { hotels: NonNullable<TripJSON['hotel_search']>[
               {h.highlights && <p className="text-xs text-gray-500 mt-0.5">{h.highlights}</p>}
             </div>
             <div className="text-right flex-shrink-0 ml-3">
-              <p className="text-base font-bold text-blue-600">¥{h.price_per_night_cny.toLocaleString()}</p>
-              <p className="text-xs text-gray-400">/night</p>
+              {h.price_per_night_cny > 0 ? (
+                <>
+                  <p className="text-base font-bold text-blue-600">¥{h.price_per_night_cny.toLocaleString()}</p>
+                  <p className="text-xs text-gray-400">/night</p>
+                </>
+              ) : (
+                <p className="text-xs text-gray-400">Price varies</p>
+              )}
             </div>
           </div>
         ))}
@@ -644,19 +656,27 @@ function TripResultCard({ data, onSave, onModify }: {
   const toNum = (v: unknown) => parseFloat(String(v).replace(/[^0-9.]/g, '')) || 0
   const numericBreakdown = Object.fromEntries(
     Object.entries(data.budget_breakdown_per_person_cny ?? {})
-      .filter(([k]) => !['total_estimated', 'total', 'notes'].includes(k))
+      .filter(([k]) => !['total_estimated', 'total', 'notes', '_skip'].includes(k))
       .map(([k, v]) => [k, toNum(v)])
       .filter(([, v]) => (v as number) > 0)
   )
 
-  // Sanity check: if AI returned budget_per_person 10x smaller than total, auto-correct
-  const rawPerPerson = toNum(data.budget_breakdown_per_person_cny?.total_estimated ?? data.budget_per_person_cny ?? 0)
+  // Determine per-person budget — prefer breakdown total, then explicit fields
+  const breakdownTotal = toNum(data.budget_breakdown_per_person_cny?.total_estimated ?? data.budget_breakdown_per_person_cny?.total ?? 0)
+  const rawPerPerson = toNum(data.budget_per_person_cny ?? 0)
   const rawTotal = toNum(data.total_budget_cny ?? 0)
-  const travelers = data.travelers ?? 2
-  const perPerson = (rawTotal > 0 && rawPerPerson > 0 && rawTotal / rawPerPerson > 5)
-    ? Math.round(rawTotal / travelers)   // AI confused total vs per-person — fix it
-    : rawPerPerson
-  const totalBudget = toNum(data.budget_per_person_cny ?? data.total_budget_cny ?? 15000)
+  const travelers = data.travelers ?? 1
+
+  // Pick the best per-person figure
+  let perPerson = breakdownTotal || rawPerPerson || (rawTotal ? rawTotal / travelers : 0)
+
+  // Sanity check: if AI confused total vs per-person (ratio > 5x), auto-correct
+  if (rawTotal > 0 && perPerson > 0 && rawTotal / perPerson > 5) {
+    perPerson = Math.round(rawTotal / travelers)
+  }
+
+  // totalBudget = what the user said their per-person budget is
+  const totalBudget = rawPerPerson || (rawTotal ? rawTotal / travelers : perPerson) || 15000
 
   return (
     <div className="w-full max-w-xl">
