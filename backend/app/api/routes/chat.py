@@ -57,17 +57,35 @@ async def chat(
 
     # 提取最后一条 AI 消息作为回复
     ai_messages = [m for m in result.get("messages", []) if hasattr(m, "content") and m.type == "ai"]
-    reply = ai_messages[-1].content if ai_messages else "I'm sorry, I couldn't process that."
+    last_content = ai_messages[-1].content if ai_messages else ""
 
-    # 如果生成了完整行程，一并返回
-    trip_plan = None
-    if result.get("itinerary"):
-        trip_plan = result["itinerary"]
-    elif result.get("budget_breakdown"):
-        trip_plan = {
-            "itinerary": result.get("itinerary", {}),
-            "budget": result.get("budget_breakdown", {}),
-        }
+    # 如果 itinerary 节点生成了结构化 JSON，直接把 JSON 字符串作为 reply
+    # 前端的 parseTripJSON() 会自动检测并渲染成卡片
+    import json, re
+    itinerary = result.get("itinerary", {})
+    if itinerary:
+        # itinerary 已经是 dict，直接序列化为 JSON 字符串返回
+        reply = json.dumps(itinerary, ensure_ascii=False)
+        trip_plan = itinerary
+    else:
+        # 没有完整行程（信息不足，还在追问阶段）—— 返回自然语言回复
+        # 尝试从最后一条消息里提取 JSON block（itinerary_agent 可能把 JSON 嵌在文字里）
+        match = re.search(r"```json\s*([\s\S]*?)\s*```", last_content)
+        if match:
+            try:
+                parsed = json.loads(match.group(1))
+                if parsed.get("destination") or parsed.get("daily_itinerary"):
+                    reply = match.group(1).strip()
+                    trip_plan = parsed
+                else:
+                    reply = last_content
+                    trip_plan = None
+            except json.JSONDecodeError:
+                reply = last_content
+                trip_plan = None
+        else:
+            reply = last_content or "I'm sorry, I couldn't process that."
+            trip_plan = None
 
     return ChatResponse(
         reply=reply,

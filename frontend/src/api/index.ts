@@ -4,7 +4,13 @@ import axios from 'axios'
 // In local dev, it falls back to '/api/v1' which is proxied by Vite to localhost:8000.
 const baseURL = import.meta.env.VITE_API_BASE_URL ?? '/api/v1'
 
-const api = axios.create({ baseURL })
+const api = axios.create({
+  baseURL,
+  headers: {
+    // Bypass ngrok browser warning page when using ngrok tunnel
+    'ngrok-skip-browser-warning': 'true',
+  },
+})
 
 // Attach JWT token to every request
 api.interceptors.request.use((config) => {
@@ -27,6 +33,10 @@ export const chatApi = {
 
 export const tripsApi = {
   list: () => api.get('/trips'),
+  create: (data: {
+    destination: string; start_date?: string; end_date?: string
+    budget?: number; currency?: string; travel_style?: string
+  }) => api.post('/trips', data),
 }
 
 export const prefsApi = {

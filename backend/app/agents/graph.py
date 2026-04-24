@@ -43,6 +43,7 @@ from app.agents.nodes import (
     hotel_node,
     weather_node,
     navigation_node,
+    restaurant_node,
     itinerary_node,
     budget_node,
 )
@@ -74,13 +75,14 @@ def build_graph(checkpointer=None):
     graph = StateGraph(AgentState)
 
     # ── 添加节点（每个节点是一个独立的专业 Agent） ────────────
-    graph.add_node("coordinator", coordinator_node)      # 协调者：意图解析
-    graph.add_node("flight_search", flight_node)         # 机票搜索
-    graph.add_node("hotel_search", hotel_node)           # 酒店比价
-    graph.add_node("weather_check", weather_node)        # 天气查询
-    graph.add_node("navigation", navigation_node)        # 路线规划
-    graph.add_node("plan_itinerary", itinerary_node)      # 行程编排
-    graph.add_node("analyze_budget", budget_node)        # 预算分析
+    graph.add_node("coordinator", coordinator_node)
+    graph.add_node("flight_search", flight_node)
+    graph.add_node("hotel_search", hotel_node)
+    graph.add_node("weather_check", weather_node)
+    graph.add_node("navigation", navigation_node)
+    graph.add_node("restaurant_search", restaurant_node)   # 真实餐厅数据
+    graph.add_node("plan_itinerary", itinerary_node)
+    graph.add_node("analyze_budget", budget_node)
 
     # ── 设置入口点 ──────────────────────────────────────────
     graph.set_entry_point("coordinator")
@@ -98,10 +100,9 @@ def build_graph(checkpointer=None):
     # ── 搜索阶段：依次执行（每个都是快速 API 调用） ──────────
     graph.add_edge("flight_search", "hotel_search")
     graph.add_edge("hotel_search", "weather_check")
-
-    # ── 搜索完成 → 路线 → 行程 → 预算 → 结束 ──────────────
     graph.add_edge("weather_check", "navigation")
-    graph.add_edge("navigation", "plan_itinerary")
+    graph.add_edge("navigation", "restaurant_search")    # 搜索真实餐厅
+    graph.add_edge("restaurant_search", "plan_itinerary")
     graph.add_edge("plan_itinerary", "analyze_budget")
     graph.add_edge("analyze_budget", END)
 
