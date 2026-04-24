@@ -27,11 +27,12 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# 跨域中间件 —— 允许前端开发服务器访问（生产环境应限制 origins）
+# 跨域中间件 —— 允许所有来源（包括 Vercel 部署的前端）
+# 生产环境可改为具体域名，如 ["https://your-app.vercel.app"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],       # 生产环境请改为具体前端域名
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,   # credentials=True 与 allow_origins=["*"] 不兼容，改为 False
     allow_methods=["*"],
     allow_headers=["*"],
 )

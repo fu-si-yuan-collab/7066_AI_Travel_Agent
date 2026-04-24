@@ -1,6 +1,10 @@
 import axios from 'axios'
 
-const api = axios.create({ baseURL: '/api/v1' })
+// In production (Vercel), VITE_API_BASE_URL points to the Railway backend.
+// In local dev, it falls back to '/api/v1' which is proxied by Vite to localhost:8000.
+const baseURL = import.meta.env.VITE_API_BASE_URL ?? '/api/v1'
+
+const api = axios.create({ baseURL })
 
 // Attach JWT token to every request
 api.interceptors.request.use((config) => {
