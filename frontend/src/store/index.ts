@@ -53,6 +53,6 @@ export const useStore = create<AppStore>()(
       activeTab: 'chat',
       setActiveTab: (t) => set({ activeTab: t }),
     }),
-    { name: 'travel-agent-store', partialize: (s) => ({ auth: s.auth, threadId: s.threadId }) }
+    { name: 'travel-agent-store', partialize: (s) => ({ auth: s.auth }) }
   )
 )
