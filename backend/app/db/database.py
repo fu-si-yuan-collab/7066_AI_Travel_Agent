@@ -10,8 +10,8 @@ from app.config import get_settings
 
 settings = get_settings()
 
-# 创建异步引擎（DEBUG 模式下打印 SQL 语句）
-engine = create_async_engine(settings.DATABASE_URL, echo=settings.DEBUG)
+# 创建异步引擎（使用 async_database_url 自动处理 Railway 的 postgresql:// 前缀）
+engine = create_async_engine(settings.async_database_url, echo=settings.DEBUG)
 
 # 创建异步会话工厂（expire_on_commit=False 避免提交后访问属性时触发惰性加载）
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
