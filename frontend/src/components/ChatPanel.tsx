@@ -55,69 +55,53 @@ function safeNum(v: unknown): string {
 
 // ─── Helper: detect if a string is a trip JSON ───────────────────────────────
 function normalizeTripJSON(obj: Record<string, unknown>): TripJSON | null {
-  // Must have at least a destination-like field to be a trip JSON
-  const dest = (obj.destination ?? obj.destination_city ?? obj.trip_overview) as string | Record<string,unknown> | undefined
-  if (!dest) return null
+  if (!obj.destination && !obj.destination_city && !obj.trip_overview) return null
 
-  // ── Flatten nested structures ──────────────────────────────────────────────
-  // Some AI outputs wrap everything in trip_overview
   const overview = (typeof obj.trip_overview === 'object' && obj.trip_overview
     ? obj.trip_overview : obj) as Record<string, unknown>
 
-  // ── Destination ────────────────────────────────────────────────────────────
-  const destination = (overview.destination ?? overview.destination_city ?? '') as string
+  const destination = String(overview.destination ?? overview.destination_city ?? '')
 
-  // ── Dates — handle: travel_dates, dates, start_date/end_date at root ───────
   const datesObj = (overview.travel_dates ?? overview.dates ?? {}) as Record<string, unknown>
-  const departure = (datesObj.departure ?? datesObj.start_date ?? overview.start_date ?? overview.departure_date ?? '') as string
-  const returnDate = (datesObj.return ?? datesObj.end_date ?? overview.end_date ?? overview.return_date ?? '') as string
-  const durationDays = (datesObj.duration_days ?? overview.duration_days) as number | undefined
+  const departure = String(datesObj.departure ?? datesObj.start_date ?? datesObj.start ?? overview.start_date ?? overview.departure_date ?? '')
+  const returnDate = String(datesObj.return ?? datesObj.end_date ?? datesObj.end ?? overview.end_date ?? overview.return_date ?? '')
+  const durationDays = Number(datesObj.duration_days ?? datesObj.nights ?? overview.duration_days) || undefined
 
-  // ── Travelers & budget ─────────────────────────────────────────────────────
   const travelers = Number(overview.travelers ?? 1)
-  const totalBudget = Number(overview.total_budget_cny ?? overview.total_budget ?? 0)
-  const perPersonRaw = Number(overview.budget_per_person_cny ?? overview.budget_per_person ?? (totalBudget ? totalBudget / travelers : 0))
-
-  // ── Travel style ───────────────────────────────────────────────────────────
-  const travelStyle = (overview.travel_style ?? overview.preferred_travel_style ?? '') as string
-
-  // ── Interests ──────────────────────────────────────────────────────────────
+  const budgetObj = (overview.budget ?? {}) as Record<string, unknown>
+  const totalBudget = Number(overview.total_budget_cny ?? budgetObj.total_budget_cny ?? budgetObj.total ?? 0)
+  const perPersonRaw = Number(overview.budget_per_person_cny ?? budgetObj.budget_per_person_cny ?? budgetObj.per_person ?? (totalBudget ? totalBudget / travelers : 0))
+  const travelStyle = String(overview.travel_style ?? overview.preferred_travel_style ?? '')
   const interests = (overview.interests ?? []) as string[]
 
-  // ── Daily itinerary — handle: daily_itinerary, itinerary, days ────────────
   type DayRaw = Record<string, unknown>
   const rawDays = ((overview.daily_itinerary ?? overview.itinerary ?? overview.days ?? []) as DayRaw[])
-
-  // Transport routes for injection
-  type RouteRaw = { route?: string; transport?: string; duration?: string; from?: string; to?: string }
-  const rawRoutes = ((overview.transportation_routes ?? overview.routes ?? []) as RouteRaw[])
+  type RouteRaw = Record<string, unknown>
+  const rawRoutes = ((overview.transportation_routes ?? overview.transport_routes ?? overview.routes ?? []) as RouteRaw[])
 
   const days: DayItinerary[] = rawDays.map((d, i) => {
-    // Activities: handle string[] or object[] with description/name fields
-    const rawActs = (d.activities ?? d.schedule ?? []) as unknown[]
+    const rawActs = (d.activities ?? d.schedule ?? d.events ?? []) as unknown[]
     const activities: string[] = rawActs.map(a => {
       if (typeof a === 'string') return a
       if (typeof a === 'object' && a !== null) {
         const ao = a as Record<string, unknown>
-        const time = ao.time ?? ao.start_time ?? ''
-        const name = ao.name ?? ao.title ?? ao.activity ?? ''
-        const desc = ao.description ?? ao.details ?? ''
-        const cost = ao.cost ?? ao.fee ?? ao.price ?? ''
-        return [time && `${time} ·`, name, desc && `— ${desc}`, cost && `Fee: ¥${cost}`]
-          .filter(Boolean).join(' ')
+        const time = String(ao.time ?? ao.start_time ?? ao.hour ?? '')
+        const name = String(ao.activity ?? ao.name ?? ao.title ?? ao.description ?? ao.event ?? '')
+        const detail = String(ao.details ?? ao.note ?? '')
+        const cost = ao.cost ?? ao.fee ?? ao.price ?? ao.fare ?? ''
+        const parts = [time && `${time} ·`, name, detail && name !== detail && `— ${detail}`, cost && `(¥${cost})`].filter(Boolean)
+        return parts.join(' ')
       }
       return String(a)
-    })
+    }).filter(Boolean)
 
-    // Transport for this day
-    const route = rawRoutes[i]
     const transport = d.transport as { route?: string; notes?: string } | undefined
+    const route = rawRoutes[i] as RouteRaw | undefined
     const transportData = transport ?? (route ? {
-      route: route.route ?? `${route.from ?? ''} → ${route.to ?? ''}`,
-      notes: [route.transport, route.duration].filter(Boolean).join(' · '),
+      route: String(route.route ?? `${route.from ?? ''} → ${route.to ?? ''}`),
+      notes: [route.transport ?? route.mode, route.fare_cny ? `¥${route.fare_cny}` : route.fare, route.duration].filter(Boolean).join(' · '),
     } : undefined)
 
-    // Daily cost
     const costRaw = (d.daily_cost_per_person ?? d.cost ?? d.daily_cost ?? {}) as Record<string, unknown>
     const dailyCost = Object.keys(costRaw).length > 0
       ? Object.fromEntries(Object.entries(costRaw).map(([k, v]) => [k, Number(v) || 0]))
@@ -125,8 +109,8 @@ function normalizeTripJSON(obj: Record<string, unknown>): TripJSON | null {
 
     return {
       day: Number(d.day ?? i + 1),
-      date: (d.date ?? '') as string,
-      theme: (d.theme ?? d.title ?? d.summary ?? '') as string,
+      date: String(d.date ?? ''),
+      theme: String(d.theme ?? d.title ?? d.summary ?? ''),
       activities,
       transport: transportData,
       daily_cost_per_person: dailyCost,
@@ -134,75 +118,78 @@ function normalizeTripJSON(obj: Record<string, unknown>): TripJSON | null {
     }
   })
 
-  // ── Hotels — handle: hotel_search, hotel_recommendations, hotels ──────────
   type HotelRaw = Record<string, unknown>
   const hotelSearch = overview.hotel_search as Record<string, unknown> | undefined
   const rawHotels = ((hotelSearch?.example_hotels ?? overview.hotel_recommendations ?? overview.hotels ?? []) as HotelRaw[])
   const exampleHotels = rawHotels.map(h => {
-    const platforms = (h.booking_platforms ?? h.platforms ?? {}) as Record<string, number>
-    const firstPlatform = Object.keys(platforms)[0] ?? 'Booking.com'
-    const priceFromPlatforms = Object.values(platforms).find(v => Number(v) > 0) ?? 0
-    const price = Number(
-      h.price_per_night_cny ?? h.average_price_per_night_cny ??
-      h.price_per_night ?? h.price ?? h.rate ?? priceFromPlatforms
-    )
+    const priceComp = (h.price_comparison ?? h.booking_platforms ?? h.platforms ?? {}) as Record<string, unknown>
+    const priceFromComp = Object.values(priceComp)
+      .map(v => parseFloat(String(v).replace(/[^0-9.]/g, '')))
+      .filter(n => n > 0).sort((a, b) => a - b)[0] ?? 0
+    const price = Number(h.price_per_night_cny ?? h.average_price_per_night_cny ?? h.price_per_night ?? h.price ?? h.rate) || priceFromComp
     return {
-      name: (h.name ?? h.hotel_name ?? '') as string,
-      area: (h.area ?? h.location ?? h.district ?? '') as string,
+      name: String(h.name ?? h.hotel_name ?? ''),
+      area: String(h.area ?? h.location ?? h.district ?? ''),
       stars: Number(h.stars ?? h.star_rating ?? h.hotel_class ?? 3),
       price_per_night_cny: isNaN(price) ? 0 : price,
-      platform: (h.platform ?? firstPlatform) as string,
-      highlights: (h.highlights ?? h.description ?? h.features ?? '') as string,
+      platform: Object.keys(priceComp)[0] ?? String(h.platform ?? 'Booking.com'),
+      highlights: String(h.highlights ?? h.description ?? (h.amenities as string[] | undefined)?.join(', ') ?? ''),
     }
-  }).filter(h => h.name)  // remove empty entries
+  }).filter(h => h.name)
 
-  // ── Restaurants ────────────────────────────────────────────────────────────
   type RestRaw = Record<string, unknown>
   const rawRests = ((overview.restaurant_highlights ?? overview.dining_recommendations ?? overview.restaurants ?? []) as RestRaw[])
   const restaurants = rawRests.map(r => ({
-    name: (r.name ?? '') as string,
-    type: (r.type ?? r.cuisine ?? '') as string,
-    area: (r.area ?? r.location ?? '') as string,
-    address: (r.address ?? '') as string,
+    name: String(r.name ?? ''),
+    type: String(r.type ?? r.cuisine ?? ''),
+    area: String(r.area ?? r.location ?? ''),
+    address: String(r.address ?? ''),
     avg_price_cny: Number(r.avg_price_cny ?? r.price ?? r.average_price ?? 0),
-    must_order: (r.must_order ?? r.signature_dish ?? r.recommended_dish ?? '') as string,
-    tip: (r.tip ?? r.notes ?? '') as string,
+    must_order: String(r.must_order ?? r.signature_dish ?? r.recommended_dish ?? ''),
+    tip: String(r.tip ?? r.notes ?? ''),
   }))
 
-  // ── Budget breakdown ───────────────────────────────────────────────────────
   type BudgetRaw = Record<string, number | string>
-  const rawBudget = (overview.budget_breakdown_per_person_cny ?? overview.budget_breakdown ?? overview.budget ?? {}) as BudgetRaw
+  const rawBudget = (overview.budget_breakdown_per_person_cny ?? overview.budget_breakdown ?? overview.budget_summary ?? {}) as Record<string, unknown>
   const KEY_MAP: Record<string, string> = {
-    airfare: 'flight', air_ticket: 'flight', flights: 'flight',
+    airfare: 'flight', air_ticket: 'flight', flights: 'flight', beijing_tokyo: '_skip', tokyo_beijing: '_skip',
     accommodation: 'hotel', lodging: 'hotel',
     food: 'meals', dining: 'meals', restaurants: 'meals',
     activities_transport: 'activities', sightseeing: 'activities',
     transportation: 'local_transport', transit: 'local_transport',
-    // ignore summary fields — don't render them as budget segments
     total_spent: '_skip', budget_remain: '_skip', remaining: '_skip',
+    total_used: '_skip', total_budget_cny: '_skip', currency: '_skip',
   }
   const normalizedBudget: BudgetRaw = {}
   for (const [k, v] of Object.entries(rawBudget)) {
     const key = KEY_MAP[k] ?? k
-    if (key !== '_skip') normalizedBudget[key] = v
+    if (key === '_skip') continue
+    if (typeof v === 'object' && v !== null) {
+      const nested = v as Record<string, unknown>
+      const total = Number(nested.total ?? nested.total_cny ?? 0)
+      if (total > 0) normalizedBudget[key] = total
+    } else {
+      const num = parseFloat(String(v).replace(/[^0-9.]/g, ''))
+      if (!isNaN(num) && num > 0) normalizedBudget[key] = num
+    }
   }
 
-  // ── Weather ────────────────────────────────────────────────────────────────
-  const weatherRaw = (overview.weather_forecast ?? overview.weather ?? {}) as Record<string, string>
-  const weather = {
-    period: weatherRaw.period ?? weatherRaw.dates ?? '',
-    expected_conditions: weatherRaw.expected_conditions ?? weatherRaw.forecast ?? weatherRaw.description ?? weatherRaw.summary ?? '',
+  const weatherRaw = (overview.weather_forecast ?? overview.weather ?? {}) as Record<string, unknown>
+  let weatherPeriod = ''
+  let weatherConditions = ''
+  const firstKey = Object.keys(weatherRaw)[0] ?? ''
+  if (firstKey.match(/^\d{4}-\d{2}-\d{2}$/)) {
+    const temps = Object.values(weatherRaw).map(v => (v as Record<string, string>).temperature ?? '')
+    const conds = [...new Set(Object.values(weatherRaw).map(v => (v as Record<string, string>).condition ?? '').filter(Boolean))]
+    weatherPeriod = `${firstKey} ~ ${Object.keys(weatherRaw).slice(-1)[0]}`
+    weatherConditions = `${temps[0] ?? ''}, ${conds.join('/')}`
+  } else {
+    weatherPeriod = String(weatherRaw.period ?? weatherRaw.dates ?? '')
+    weatherConditions = String(weatherRaw.expected_conditions ?? weatherRaw.forecast ?? weatherRaw.description ?? weatherRaw.summary ?? '')
   }
 
-  // ── Packing tips ───────────────────────────────────────────────────────────
   const packingTips = (overview.packing_tips ?? overview.packing ?? overview.tips ?? []) as string[]
-
-  // ── Transportation summary ─────────────────────────────────────────────────
   const transRaw = (overview.transportation ?? overview.transport ?? {}) as Record<string, unknown>
-  const transportation = Object.keys(transRaw).length > 0 ? {
-    flight: transRaw.flight as TripJSON['transportation'],
-    local_transport: transRaw.local_transport as TripJSON['transportation'],
-  } : undefined
 
   return {
     destination,
@@ -215,9 +202,9 @@ function normalizeTripJSON(obj: Record<string, unknown>): TripJSON | null {
     daily_itinerary: days.length > 0 ? days : undefined,
     hotel_search: exampleHotels.length > 0 ? { example_hotels: exampleHotels } : undefined,
     restaurant_highlights: restaurants.length > 0 ? restaurants : undefined,
-    transportation: transportation as TripJSON['transportation'],
+    transportation: Object.keys(transRaw).length > 0 ? transRaw as TripJSON['transportation'] : undefined,
     budget_breakdown_per_person_cny: Object.keys(normalizedBudget).length > 0 ? normalizedBudget : undefined,
-    weather_forecast: (weather.period || weather.expected_conditions) ? weather : undefined,
+    weather_forecast: (weatherPeriod || weatherConditions) ? { period: weatherPeriod, expected_conditions: weatherConditions } : undefined,
     packing_tips: packingTips.length > 0 ? packingTips : undefined,
   }
 }
@@ -225,11 +212,9 @@ function normalizeTripJSON(obj: Record<string, unknown>): TripJSON | null {
 function parseTripJSON(text: string): TripJSON | null {
   const trimmed = text.trim()
   const candidates: string[] = []
-
   const match = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/)
   if (match) candidates.push(match[1].trim())
   candidates.push(trimmed)
-
   for (const s of candidates) {
     try {
       const obj = JSON.parse(s)
