@@ -11,5 +11,5 @@ COPY . .
 
 EXPOSE 8000
 
-# Railway injects $PORT at runtime; fall back to 8000 for local Docker
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# Use Python to read $PORT at runtime — works reliably in Railway/Docker
+CMD ["python", "-c", "import os,uvicorn; uvicorn.run('app.main:app', host='0.0.0.0', port=int(os.environ.get('PORT', 8000)))"]
