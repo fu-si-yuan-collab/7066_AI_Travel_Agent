@@ -17,6 +17,26 @@ from app.models.interaction import InteractionEvent
 POSITIVE_EVENTS = {"click", "save", "add_to_trip", "final_adopt", "like"}
 NEGATIVE_EVENTS = {"dislike", "not_relevant"}
 
+EVENT_ALIASES = {
+    "mark_adopted": "final_adopt",
+    "adopt": "final_adopt",
+    "favorite": "save",
+    "bookmark": "save",
+    "open": "click",
+}
+
+VALID_EVENT_TYPES = {
+    "exposure",
+    "click",
+    "save",
+    "add_to_trip",
+    "final_adopt",
+    "delete",
+    "feedback",
+    "chat_submit",
+    "chat_response",
+}
+
 _BASE_EVENT_WEIGHT = {
     "exposure": 0.08,
     "click": 0.35,
@@ -49,6 +69,31 @@ def _normalize_score(raw: float) -> float:
     return math.tanh(raw / 2.5) * 2.5
 
 
+def _canonical_event_type(event_type: str) -> str:
+    raw = (event_type or "").strip().lower()
+    canonical = EVENT_ALIASES.get(raw, raw)
+    return canonical if canonical in VALID_EVENT_TYPES else "exposure"
+
+
+def _canonical_feedback_label(feedback_label: str) -> str:
+    value = (feedback_label or "").strip().lower()
+    if value in {"like", "dislike", "not_relevant"}:
+        return value
+    return ""
+
+
+def _enrich_metadata(metadata_json: dict | None, *, event_type: str, session_id: str) -> dict:
+    now = datetime.now(timezone.utc)
+    metadata: dict = dict(metadata_json or {})
+    metadata.setdefault("schema_version", "interaction/v2")
+    metadata.setdefault("server_timestamp", now.isoformat())
+    metadata.setdefault("hour_of_day", now.hour)
+    metadata.setdefault("day_of_week", now.weekday())
+    metadata.setdefault("event_type_canonical", event_type)
+    metadata.setdefault("has_session", bool(session_id))
+    return metadata
+
+
 async def log_interaction_event(
     db: AsyncSession,
     user_id: str,
@@ -65,11 +110,13 @@ async def log_interaction_event(
     currency: str = "CNY",
     metadata_json: dict | None = None,
 ) -> InteractionEvent:
+    canonical_event_type = _canonical_event_type(event_type)
+    canonical_feedback_label = _canonical_feedback_label(feedback_label)
     event = InteractionEvent(
         user_id=user_id,
         session_id=session_id,
-        event_type=event_type,
-        feedback_label=feedback_label,
+        event_type=canonical_event_type,
+        feedback_label=canonical_feedback_label,
         item_type=item_type,
         item_id=item_id,
         item_title=item_title,
@@ -77,7 +124,11 @@ async def log_interaction_event(
         travel_style=travel_style,
         budget=budget,
         currency=currency,
-        metadata_json=metadata_json,
+        metadata_json=_enrich_metadata(
+            metadata_json,
+            event_type=canonical_event_type,
+            session_id=session_id,
+        ),
     )
     db.add(event)
     await db.commit()
@@ -168,3 +219,53 @@ async def get_destination_popularity_scores(
         return {}
     max_v = max(max(counts.values()), 1.0)
     return {k: round(max(0.0, v / max_v), 4) for k, v in counts.items()}
+
+
+async def get_user_recent_event_profile(
+    db: AsyncSession,
+    *,
+    user_id: str,
+    lookback_days: int = 90,
+) -> dict:
+    """Aggregate recent interaction behavior for feature priors."""
+    result = await db.execute(
+        select(
+            InteractionEvent.item_type,
+            InteractionEvent.event_type,
+            InteractionEvent.feedback_label,
+            InteractionEvent.created_at,
+        ).where(InteractionEvent.user_id == user_id)
+    )
+
+    now = datetime.now(timezone.utc)
+    type_weight_sum: dict[str, float] = defaultdict(float)
+    event_count = 0
+    positive_count = 0
+
+    for item_type, event_type, feedback_label, created_at in result.all():
+        if created_at:
+            age_days = max(0.0, (now - created_at).total_seconds() / 86400)
+            if age_days > lookback_days:
+                continue
+        weight = _event_weight(event_type, feedback_label)
+        decay = _time_decay(created_at)
+        type_weight_sum[str(item_type or "unknown")] += weight * decay
+        event_count += 1
+        if weight > 0:
+            positive_count += 1
+
+    if event_count == 0:
+        return {"engagement_rate": 0.0, "type_affinity": {}}
+
+    min_v = min(type_weight_sum.values()) if type_weight_sum else 0.0
+    max_v = max(type_weight_sum.values()) if type_weight_sum else 1.0
+    span = max(1e-9, max_v - min_v)
+    type_affinity = {
+        item_type: round((score - min_v) / span, 4)
+        for item_type, score in type_weight_sum.items()
+    }
+
+    return {
+        "engagement_rate": round(positive_count / max(1, event_count), 4),
+        "type_affinity": type_affinity,
+    }

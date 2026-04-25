@@ -45,4 +45,31 @@ export const prefsApi = {
     api.put('/preferences', data),
 }
 
+export const interactionsApi = {
+  trackEvent: (data: {
+    session_id?: string
+    event_type: string
+    item_type: string
+    item_id: string
+    item_title?: string
+    destination?: string
+    travel_style?: string
+    budget?: number
+    currency?: string
+    rank_position?: number
+    dwell_ms?: number
+    source_channel?: string
+    metadata_json?: Record<string, unknown>
+  }) => api.post('/interactions/events', data),
+  feedback: (data: {
+    session_id?: string
+    item_type: string
+    item_id: string
+    item_title?: string
+    destination?: string
+    feedback: 'like' | 'dislike'
+    metadata_json?: Record<string, unknown>
+  }) => api.post('/interactions/feedback', data),
+}
+
 export default api

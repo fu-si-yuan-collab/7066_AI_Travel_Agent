@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { Send, Bot, User, Sparkles, RotateCcw, MapPin, Calendar, Users, Wallet,
-  ChevronDown, ChevronUp, CloudSun, Train, Star, BookmarkPlus, PenLine } from 'lucide-react'
+  ChevronDown, ChevronUp, CloudSun, Train, Star, BookmarkPlus, PenLine, ThumbsUp, ThumbsDown } from 'lucide-react'
 import { useStore } from '../store'
-import { chatApi, tripsApi } from '../api'
+import { chatApi, interactionsApi, tripsApi } from '../api'
 import toast from 'react-hot-toast'
 import type { Message } from '../types'
 import TripPlannerForm from './TripPlannerForm'
@@ -51,6 +51,18 @@ function safeNum(v: unknown): string {
   // Strip currency symbols and commas, then parse
   const n = parseFloat(String(v).replace(/[¥,$,，,\s]/g, '').replace(/,/g, ''))
   return isNaN(n) ? '0' : n.toLocaleString()
+}
+
+function buildRecommendationItemId(itemType: 'hotel' | 'restaurant', title: string, area?: string, extra?: string): string {
+  const normalize = (value: string | undefined) => (value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '-')
+    .replace(/[^a-z0-9\u4e00-\u9fff-]/g, '')
+
+  return [itemType, normalize(title), normalize(area), normalize(extra)]
+    .filter(Boolean)
+    .join(':')
 }
 
 // ─── Helper: detect if a string is a trip JSON ───────────────────────────────
@@ -456,7 +468,87 @@ const PLATFORM_COLORS: Record<string, string> = {
   'Ctrip': 'bg-cyan-100 text-cyan-700',
 }
 
-function HotelCards({ hotels }: { hotels: NonNullable<TripJSON['hotel_search']>['example_hotels'] }) {
+function RecommendationFeedbackControls({
+  itemType,
+  itemId,
+  itemTitle,
+  destination,
+  travelStyle,
+}: {
+  itemType: 'hotel' | 'restaurant'
+  itemId: string
+  itemTitle: string
+  destination?: string
+  travelStyle?: string
+}) {
+  const threadId = useStore((state) => state.threadId)
+  const [selected, setSelected] = useState<'like' | 'dislike' | null>(null)
+  const [pending, setPending] = useState(false)
+
+  const submitFeedback = async (feedback: 'like' | 'dislike') => {
+    if (pending || selected === feedback) return
+    setPending(true)
+    try {
+      await interactionsApi.feedback({
+        session_id: threadId ?? undefined,
+        item_type: itemType,
+        item_id: itemId,
+        item_title: itemTitle,
+        destination,
+        feedback,
+        metadata_json: {
+          source_channel: 'chat_recommendation_card',
+          travel_style: travelStyle ?? '',
+        },
+      })
+      setSelected(feedback)
+      toast.success(feedback === 'like' ? 'Preference saved' : 'We will down-rank similar picks')
+    } catch {
+      toast.error('Failed to save feedback')
+    } finally {
+      setPending(false)
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-2 mt-3">
+      <button
+        type="button"
+        onClick={() => submitFeedback('like')}
+        disabled={pending}
+        className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${
+          selected === 'like'
+            ? 'border-green-200 bg-green-50 text-green-700'
+            : 'border-gray-200 bg-white text-gray-500 hover:border-green-200 hover:text-green-600'
+        } ${pending ? 'opacity-60' : ''}`}
+      >
+        <ThumbsUp className="w-3.5 h-3.5" /> Like
+      </button>
+      <button
+        type="button"
+        onClick={() => submitFeedback('dislike')}
+        disabled={pending}
+        className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${
+          selected === 'dislike'
+            ? 'border-rose-200 bg-rose-50 text-rose-700'
+            : 'border-gray-200 bg-white text-gray-500 hover:border-rose-200 hover:text-rose-600'
+        } ${pending ? 'opacity-60' : ''}`}
+      >
+        <ThumbsDown className="w-3.5 h-3.5" /> Dislike
+      </button>
+    </div>
+  )
+}
+
+function HotelCards({
+  hotels,
+  destination,
+  travelStyle,
+}: {
+  hotels: NonNullable<TripJSON['hotel_search']>['example_hotels']
+  destination?: string
+  travelStyle?: string
+}) {
   if (!hotels?.length) return null
   return (
     <div className="mb-4">
@@ -482,6 +574,13 @@ function HotelCards({ hotels }: { hotels: NonNullable<TripJSON['hotel_search']>[
                 {h.area && <span className="text-xs text-gray-400">{h.area}</span>}
               </div>
               {h.highlights && <p className="text-xs text-gray-500 mt-0.5">{h.highlights}</p>}
+              <RecommendationFeedbackControls
+                itemType="hotel"
+                itemId={buildRecommendationItemId('hotel', h.name, h.area, h.platform)}
+                itemTitle={h.name}
+                destination={destination}
+                travelStyle={travelStyle}
+              />
             </div>
             <div className="text-right flex-shrink-0 ml-3">
               {h.price_per_night_cny > 0 ? (
@@ -501,7 +600,15 @@ function HotelCards({ hotels }: { hotels: NonNullable<TripJSON['hotel_search']>[
 }
 
 // ─── RestaurantHighlights ─────────────────────────────────────────────────────
-function RestaurantHighlights({ restaurants }: { restaurants: NonNullable<TripJSON['restaurant_highlights']> }) {
+function RestaurantHighlights({
+  restaurants,
+  destination,
+  travelStyle,
+}: {
+  restaurants: NonNullable<TripJSON['restaurant_highlights']>
+  destination?: string
+  travelStyle?: string
+}) {
   if (!restaurants.length) return null
   return (
     <div className="mb-4">
@@ -524,6 +631,13 @@ function RestaurantHighlights({ restaurants }: { restaurants: NonNullable<TripJS
             {r.address && <p className="text-xs text-gray-500 mt-1">📍 {r.address}</p>}
             {r.must_order && <p className="text-xs text-gray-700 mt-1">⭐ Must order: <span className="font-medium">{r.must_order}</span></p>}
             {r.tip && <p className="text-xs text-amber-600 mt-1">💡 {r.tip}</p>}
+            <RecommendationFeedbackControls
+              itemType="restaurant"
+              itemId={buildRecommendationItemId('restaurant', r.name, r.area, r.type)}
+              itemTitle={r.name}
+              destination={destination}
+              travelStyle={travelStyle}
+            />
           </div>
         ))}
       </div>
@@ -668,9 +782,9 @@ function TripResultCard({ data, onSave, onModify }: {
       <TripHeader data={data} />
       <WeatherBanner data={data.weather_forecast} />
       {data.daily_itinerary && <DailyItinerary data={data} days={data.daily_itinerary} />}
-      <HotelCards hotels={data.hotel_search?.example_hotels} />
+      <HotelCards hotels={data.hotel_search?.example_hotels} destination={data.destination} travelStyle={data.travel_style} />
       {data.restaurant_highlights && data.restaurant_highlights.length > 0 && (
-        <RestaurantHighlights restaurants={data.restaurant_highlights} />
+        <RestaurantHighlights restaurants={data.restaurant_highlights} destination={data.destination} travelStyle={data.travel_style} />
       )}
       {Object.keys(numericBreakdown).length > 0 && (
         <BudgetDonut breakdown={numericBreakdown} perPerson={perPerson} totalBudget={totalBudget} />

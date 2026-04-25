@@ -139,6 +139,9 @@ class InteractionEventIn(BaseModel):
     travel_style: str | None = None
     budget: float | None = None
     currency: str | None = None
+    rank_position: int | None = None
+    dwell_ms: int | None = None
+    source_channel: str | None = None
     metadata_json: dict | None = None
 
 

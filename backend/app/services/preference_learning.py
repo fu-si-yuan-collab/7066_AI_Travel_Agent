@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.interaction import InteractionEvent
 from app.models.preference import UserPreference
+from app.recommendations.online_ranker import update_model_weights
 
 
 _EVENT_DELTA = {
@@ -63,10 +64,14 @@ def _normalize_learned_tags(learned: dict[str, float]) -> dict[str, float]:
     if not learned:
         return {}
 
+    # 模型权重单独保存，不参与行为标签去噪归一化。
+    model_weights = {k: float(v) for k, v in learned.items() if str(k).startswith("model:w:")}
+    behavior_tags = {k: float(v) for k, v in learned.items() if not str(k).startswith("model:w:")}
+
     # 去噪：去掉接近 0 的弱信号。
-    cleaned = {k: float(v) for k, v in learned.items() if abs(float(v)) >= _NOISE_FLOOR}
+    cleaned = {k: float(v) for k, v in behavior_tags.items() if abs(float(v)) >= _NOISE_FLOOR}
     if not cleaned:
-        return {}
+        return model_weights
 
     # 只保留最显著的标签，避免长期累积噪声。
     top_items = sorted(cleaned.items(), key=lambda item: abs(item[1]), reverse=True)[:_MAX_TAGS]
@@ -75,7 +80,20 @@ def _normalize_learned_tags(learned: dict[str, float]) -> dict[str, float]:
     # 归一化：控制 learned_tags 的数值范围，避免单个标签无限放大。
     max_abs = max(abs(v) for v in cleaned.values()) or 1.0
     scale = max(1.0, max_abs / 3.0)
-    return {k: round(_clip(v / scale, -3.0, 3.0), 4) for k, v in cleaned.items()}
+    normalized = {k: round(_clip(v / scale, -3.0, 3.0), 4) for k, v in cleaned.items()}
+    normalized.update({k: round(_clip(v), 6) for k, v in model_weights.items()})
+    return normalized
+
+
+def _event_to_label(event_type: str, feedback_label: str = "") -> float | None:
+    key = f"feedback:{feedback_label}" if event_type == "feedback" and feedback_label else event_type
+    if key in {"save", "add_to_trip", "final_adopt", "feedback:like"}:
+        return 1.0
+    if key in {"delete", "feedback:dislike", "feedback:not_relevant"}:
+        return 0.0
+    if key in {"click"}:
+        return 0.7
+    return None
 
 
 async def _get_repeat_count(
@@ -157,6 +175,23 @@ async def learn_from_interaction(
     for tag in tags:
         old = float(learned.get(tag, 0.0))
         learned[tag] = round(_clip(old + delta), 4)
+
+    metadata = metadata_json or {}
+    ranking_features = metadata.get("ranking_features") if isinstance(metadata, dict) else None
+    event_label = _event_to_label(event_type, feedback_label)
+    if isinstance(ranking_features, dict) and event_label is not None:
+        numeric_features = {}
+        for k, v in ranking_features.items():
+            try:
+                numeric_features[str(k)] = float(v)
+            except Exception:
+                continue
+        if numeric_features:
+            learned = update_model_weights(
+                learned_tags=learned,
+                features=numeric_features,
+                label=event_label,
+            )
 
     pref.learned_tags = _normalize_learned_tags(learned)
     await db.commit()

@@ -16,8 +16,15 @@ from app.agents.state import AgentState
 from app.db.repositories.interaction_repo import (
     get_destination_popularity_scores,
     get_neighbor_item_scores,
+    get_user_recent_event_profile,
     get_user_item_affinity,
 )
+from app.recommendations.feature_engineering import (
+    budget_fit_feature,
+    build_ranking_features,
+    season_match_feature,
+)
+from app.recommendations.online_ranker import score_with_online_model
 
 
 def _month_to_season(month: int) -> str:
@@ -252,6 +259,12 @@ async def rank_candidates_with_baseline(
     ranked: list[dict] = []
     destination = state.travel_plan.destination or ""
     user_profile = _build_user_profile(state)
+    behavior_profile = await get_user_recent_event_profile(db, user_id=state.user_id)
+    type_affinity = behavior_profile.get("type_affinity", {}) if isinstance(behavior_profile, dict) else {}
+    learned_tags = (state.user_preferences or {}).get("learned_tags") if isinstance((state.user_preferences or {}).get("learned_tags"), dict) else {}
+    prefs = state.user_preferences or {}
+    budget_low = _safe_float(prefs.get("daily_budget_low"), 300.0)
+    budget_high = _safe_float(prefs.get("daily_budget_high"), 1000.0)
 
     for item_type, items in by_type.items():
         affinity = await get_user_item_affinity(db, state.user_id, item_type)
@@ -290,7 +303,7 @@ async def rank_candidates_with_baseline(
 
         for c in per_type_rows:
             ns = c["norm_scores"]
-            final_score = (
+            base_score = (
                 0.26 * ns.get("content", 0.0)
                 + 0.18 * ns.get("learned_tags", 0.0)
                 + 0.22 * ns.get("profile_similarity", 0.0)
@@ -298,18 +311,51 @@ async def rank_candidates_with_baseline(
                 + 0.15 * ns.get("collaborative", 0.0)
                 + 0.07 * ns.get("popularity", 0.0)
             )
+
+            text_blob = f"{c.get('title', '')} {' '.join(c.get('tags') or [])}"
+            features = build_ranking_features(
+                content=ns.get("content", 0.0),
+                learned_tags=ns.get("learned_tags", 0.0),
+                profile_similarity=ns.get("profile_similarity", 0.0),
+                self_affinity=ns.get("self_affinity", 0.0),
+                collaborative=ns.get("collaborative", 0.0),
+                popularity=ns.get("popularity", 0.0),
+                budget_fit=budget_fit_feature(_safe_float(c.get("price"), 0.0), budget_low, budget_high),
+                season_match=season_match_feature(state.travel_plan.start_date, text_blob),
+                rating=_safe_float(c.get("rating"), 0.0),
+            )
+            model_score = score_with_online_model(features, learned_tags)
+            item_type_prior = float(type_affinity.get(c.get("item_type", ""), 0.5))
+
+            final_score = 0.7 * base_score + 0.25 * model_score + 0.05 * item_type_prior
             c["scores"] = {
                 **{k: round(float(v), 3) for k, v in c["raw_scores"].items()},
+                "base": round(base_score, 3),
+                "model": round(model_score, 3),
                 "final": round(final_score, 3),
             }
+            c["ranking_features"] = features
             c["reason"] = (
                 f"content={c['scores']['content']}, "
                 f"lt={c['scores']['learned_tags']}, "
                 f"profile={c['scores']['profile_similarity']}, "
                 f"cf={c['scores']['collaborative']}, "
-                f"pop={c['scores']['popularity']}"
+                f"pop={c['scores']['popularity']}, "
+                f"ml={c['scores']['model']}"
             )
             ranked.append(c)
 
     ranked.sort(key=lambda x: x["scores"]["final"], reverse=True)
-    return ranked[:top_k]
+
+    # 轻量多样性重排：避免 Top-K 被单一类型占满。
+    reranked: list[dict] = []
+    seen_type_count: dict[str, int] = {}
+    for item in ranked:
+        item_type = str(item.get("item_type") or "unknown")
+        penalty = 0.08 * seen_type_count.get(item_type, 0)
+        item["scores"]["final"] = round(float(item["scores"]["final"]) - penalty, 3)
+        seen_type_count[item_type] = seen_type_count.get(item_type, 0) + 1
+        reranked.append(item)
+
+    reranked.sort(key=lambda x: x["scores"]["final"], reverse=True)
+    return reranked[:top_k]
