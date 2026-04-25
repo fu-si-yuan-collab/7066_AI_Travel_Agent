@@ -91,6 +91,8 @@ async def chat(
         reply=reply,
         thread_id=thread_id,
         trip_plan=trip_plan,
+        tool_steps=result.get("tool_steps") or None,
+        calendar_events=result.get("calendar_events") or None,
     )
 
 

@@ -1,19 +1,39 @@
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { Send, Bot, User, Sparkles, RotateCcw, MapPin, Calendar, Users, Wallet,
-  ChevronDown, ChevronUp, CloudSun, Train, Star, BookmarkPlus, PenLine } from 'lucide-react'
+  ChevronDown, ChevronUp, CloudSun, Train, Star, BookmarkPlus, PenLine, X } from 'lucide-react'
 import { useStore } from '../store'
-import { chatApi, tripsApi } from '../api'
+import { chatApi, tripsApi, calendarApi } from '../api'
 import toast from 'react-hot-toast'
-import type { Message } from '../types'
+import type { Message, CalendarEvent } from '../types'
 import TripPlannerForm from './TripPlannerForm'
 
 // ─── Types for the structured trip JSON ──────────────────────────────────────
+interface HotelForTonight {
+  name: string
+  area?: string
+  stars?: number
+  price_per_night_cny?: number
+  platform?: string
+  highlights?: string
+}
+
+interface RestaurantRec {
+  name: string
+  type?: string
+  meal?: string
+  address?: string
+  avg_price_cny?: number
+  must_order?: string
+}
+
 interface DayItinerary {
   day: number
   date?: string
   theme?: string
   activities: string[]
+  hotel_for_tonight?: HotelForTonight
+  restaurant_recommendations?: RestaurantRec[]
   transport?: { route?: string; notes?: string }
   daily_cost_per_person?: Record<string, number>
   cumulative_budget?: { spent: number; budget: number; remaining: number }
@@ -48,12 +68,11 @@ interface TripJSON {
 function safeNum(v: unknown): string {
   if (v === null || v === undefined) return '0'
   if (typeof v === 'number') return v.toLocaleString()
-  // Strip currency symbols and commas, then parse
   const n = parseFloat(String(v).replace(/[¥,$,，,\s]/g, '').replace(/,/g, ''))
   return isNaN(n) ? '0' : n.toLocaleString()
 }
 
-// ─── Helper: detect if a string is a trip JSON ───────────────────────────────
+// ─── Helper: normalize trip JSON from various AI output shapes ────────────────
 function normalizeTripJSON(obj: Record<string, unknown>): TripJSON | null {
   if (!obj.destination && !obj.destination_city && !obj.trip_overview) return null
 
@@ -107,11 +126,36 @@ function normalizeTripJSON(obj: Record<string, unknown>): TripJSON | null {
       ? Object.fromEntries(Object.entries(costRaw).map(([k, v]) => [k, Number(v) || 0]))
       : undefined
 
+    // Per-day hotel
+    const hotelRaw = d.hotel_for_tonight as Record<string, unknown> | undefined
+    const hotelForTonight: HotelForTonight | undefined = hotelRaw?.name ? {
+      name: String(hotelRaw.name ?? ''),
+      area: String(hotelRaw.area ?? ''),
+      stars: Number(hotelRaw.stars ?? 3),
+      price_per_night_cny: Number(hotelRaw.price_per_night_cny ?? hotelRaw.price ?? 0),
+      platform: String(hotelRaw.platform ?? ''),
+      highlights: String(hotelRaw.highlights ?? ''),
+    } : undefined
+
+    // Per-day restaurants
+    type RestRaw = Record<string, unknown>
+    const restsRaw = (d.restaurant_recommendations ?? d.restaurants ?? []) as RestRaw[]
+    const restaurantRecs: RestaurantRec[] = restsRaw.map(r => ({
+      name: String(r.name ?? ''),
+      type: String(r.type ?? r.cuisine ?? ''),
+      meal: String(r.meal ?? ''),
+      address: String(r.address ?? ''),
+      avg_price_cny: Number(r.avg_price_cny ?? r.price ?? 0),
+      must_order: String(r.must_order ?? r.signature_dish ?? ''),
+    })).filter(r => r.name)
+
     return {
       day: Number(d.day ?? i + 1),
       date: String(d.date ?? ''),
       theme: String(d.theme ?? d.title ?? d.summary ?? ''),
       activities,
+      hotel_for_tonight: hotelForTonight,
+      restaurant_recommendations: restaurantRecs.length > 0 ? restaurantRecs : undefined,
       transport: transportData,
       daily_cost_per_person: dailyCost,
       tips: (d.tips ?? d.notes ?? []) as string[],
@@ -356,7 +400,6 @@ function DailyItinerary({ days }: { data: TripJSON; days: NonNullable<TripJSON['
                 {/* Timeline activities */}
                 <div className="mt-3 space-y-1">
                   {d.activities.map((act, i) => {
-                    // Detect time prefix like "09:00 · " or "09:00 - "
                     const timeMatch = act.match(/^(\d{1,2}:\d{2})\s*[·\-]\s*/)
                     const time = timeMatch?.[1]
                     const content = timeMatch ? act.slice(timeMatch[0].length) : act
@@ -387,6 +430,42 @@ function DailyItinerary({ days }: { data: TripJSON; days: NonNullable<TripJSON['
                     {d.transport.notes && (
                       <p className="text-xs text-amber-600 mt-1.5">{d.transport.notes}</p>
                     )}
+                  </div>
+                )}
+
+                {/* Per-day hotel */}
+                {d.hotel_for_tonight?.name && (
+                  <div className="mt-3 p-3 bg-orange-50 border border-orange-100 rounded-xl">
+                    <p className="text-xs font-semibold text-orange-700 mb-1">🏨 Tonight's Hotel</p>
+                    <p className="text-sm font-medium text-gray-800">{d.hotel_for_tonight.name}</p>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      {d.hotel_for_tonight.area && `${d.hotel_for_tonight.area} · `}
+                      {'⭐'.repeat(Math.max(1, Math.min(5, d.hotel_for_tonight.stars ?? 3)))}
+                      {d.hotel_for_tonight.price_per_night_cny ? ` · ¥${safeNum(d.hotel_for_tonight.price_per_night_cny)}/night` : ''}
+                      {d.hotel_for_tonight.platform ? ` · ${d.hotel_for_tonight.platform}` : ''}
+                    </p>
+                    {d.hotel_for_tonight.highlights && (
+                      <p className="text-xs text-gray-400 mt-1">{d.hotel_for_tonight.highlights}</p>
+                    )}
+                  </div>
+                )}
+
+                {/* Per-day restaurants */}
+                {d.restaurant_recommendations && d.restaurant_recommendations.length > 0 && (
+                  <div className="mt-2">
+                    <p className="text-xs font-semibold text-gray-500 mb-1">🍽️ Today's Dining</p>
+                    {d.restaurant_recommendations.map((r, i) => (
+                      <div key={i} className="flex items-center gap-2 text-xs py-1.5 border-b border-gray-100 last:border-0">
+                        {r.meal && (
+                          <span className="px-1.5 py-0.5 bg-green-100 text-green-700 rounded-full text-[10px] shrink-0 font-semibold">
+                            {r.meal === 'breakfast' ? '早' : r.meal === 'lunch' ? '午' : '晚'}
+                          </span>
+                        )}
+                        <span className="font-medium text-gray-800">{r.name}</span>
+                        {r.avg_price_cny ? <span className="text-gray-400">¥{safeNum(r.avg_price_cny)}/人</span> : null}
+                        {r.must_order && <span className="text-gray-400 truncate">· {r.must_order}</span>}
+                      </div>
+                    ))}
                   </div>
                 )}
 
@@ -448,7 +527,7 @@ function DailyItinerary({ days }: { data: TripJSON; days: NonNullable<TripJSON['
   )
 }
 
-// ─── HotelCards ───────────────────────────────────────────────────────────────
+// ─── HotelCards (shown only when per-day hotels not available) ────────────────
 const PLATFORM_COLORS: Record<string, string> = {
   'Booking.com': 'bg-blue-100 text-blue-700',
   'Agoda': 'bg-orange-100 text-orange-700',
@@ -556,7 +635,6 @@ const BUDGET_LABELS: Record<string, string> = {
 function BudgetDonut({ breakdown, perPerson, totalBudget }: {
   breakdown: Record<string, number>; perPerson: number; totalBudget: number
 }) {
-  // Safely parse all values to numbers
   const entries = Object.entries(breakdown)
     .map(([k, v]) => ({ key: k, value: parseFloat(String(v).replace(/[^0-9.]/g, '')) || 0 }))
     .filter(({ value }) => value > 0)
@@ -631,13 +709,87 @@ function BudgetDonut({ breakdown, perPerson, totalBudget }: {
   )
 }
 
+// ─── BookingModal ─────────────────────────────────────────────────────────────
+type BookingType = 'flight' | 'hotel' | 'restaurant'
+
+function buildFlightUrls(origin: string, dest: string, dep: string, ret: string) {
+  const d = dep.replace(/-/g, '').slice(2)
+  void ret  // used in ctrip URL below
+  return [
+    { name: 'Skyscanner', url: `https://www.skyscanner.com/transport/flights/${origin.slice(0,3).toLowerCase()}/${dest.slice(0,3).toLowerCase()}/${d}/`, color: 'bg-blue-500' },
+    { name: '携程机票', url: `https://flights.ctrip.com/international/search/round-${encodeURIComponent(origin)}-${encodeURIComponent(dest)}?depdate=${dep}&retdate=${ret}`, color: 'bg-cyan-500' },
+    { name: 'Google Flights', url: `https://www.google.com/travel/flights?q=${encodeURIComponent(`flights from ${origin} to ${dest} ${dep}`)}`, color: 'bg-red-500' },
+  ]
+}
+
+function buildHotelUrls(city: string, checkIn: string, checkOut: string, travelers: number) {
+  return [
+    { name: '携程酒店', url: `https://hotels.ctrip.com/hotels/list?keyword=${encodeURIComponent(city)}&checkin=${checkIn}&checkout=${checkOut}`, color: 'bg-cyan-500' },
+    { name: 'Booking.com', url: `https://www.booking.com/searchresults.html?ss=${encodeURIComponent(city)}&checkin=${checkIn}&checkout=${checkOut}&group_adults=${travelers}`, color: 'bg-blue-600' },
+    { name: 'Agoda', url: `https://www.agoda.com/search?city=${encodeURIComponent(city)}&checkIn=${checkIn}&checkOut=${checkOut}`, color: 'bg-red-500' },
+    { name: 'Airbnb', url: `https://www.airbnb.com/s/${encodeURIComponent(city)}/homes?checkin=${checkIn}&checkout=${checkOut}&adults=${travelers}`, color: 'bg-rose-500' },
+  ]
+}
+
+function buildRestaurantUrls(city: string) {
+  return [
+    { name: '大众点评', url: `https://www.dianping.com/search/keyword/${encodeURIComponent(city)}/10/`, color: 'bg-orange-500' },
+    { name: 'Google Maps', url: `https://www.google.com/maps/search/restaurants+in+${encodeURIComponent(city)}`, color: 'bg-green-600' },
+    { name: 'TripAdvisor', url: `https://www.tripadvisor.com/Restaurants-g-${encodeURIComponent(city)}.html`, color: 'bg-emerald-600' },
+  ]
+}
+
+function BookingModal({ type, trip, onClose }: { type: BookingType; trip: TripJSON; onClose: () => void }) {
+  const dest = trip.destination ?? ''
+  const dep = trip.travel_dates?.departure ?? ''
+  const ret = trip.travel_dates?.return ?? ''
+  const travelers = trip.travelers ?? 1
+
+  const links = type === 'flight'
+    ? buildFlightUrls(trip.transportation?.flight?.route?.split('→')[0]?.trim() ?? 'origin', dest, dep, ret)
+    : type === 'hotel'
+    ? buildHotelUrls(dest, dep, ret, travelers)
+    : buildRestaurantUrls(dest)
+
+  const titles: Record<BookingType, string> = {
+    flight: `✈️ 订前往 ${dest} 的机票`,
+    hotel: `🏨 在 ${dest} 订酒店`,
+    restaurant: `🍜 ${dest} 餐厅推荐`,
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
+      <div className="bg-white rounded-2xl p-6 max-w-sm w-full mx-4 shadow-2xl" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-base font-bold text-gray-900">{titles[type]}</h3>
+          <button onClick={onClose} className="w-7 h-7 rounded-full bg-gray-100 flex items-center justify-center hover:bg-gray-200">
+            <X className="w-4 h-4 text-gray-500" />
+          </button>
+        </div>
+        <p className="text-xs text-gray-500 mb-4">点击跳转至对应平台，日期已预填 · 实际价格以平台为准</p>
+        <div className="space-y-2">
+          {links.map((link, i) => (
+            <a key={i} href={link.url} target="_blank" rel="noopener noreferrer"
+              className={`flex items-center justify-between w-full px-4 py-3 rounded-xl text-white text-sm font-semibold hover:opacity-90 transition-opacity ${link.color}`}>
+              <span>{link.name}</span>
+              <span className="text-white/70 text-xs">→ 前往预订</span>
+            </a>
+          ))}
+        </div>
+        <p className="text-[10px] text-gray-400 mt-4 text-center">本应用不参与订单，仅提供跳转链接</p>
+      </div>
+    </div>
+  )
+}
+
 // ─── TripResultCard ───────────────────────────────────────────────────────────
 function TripResultCard({ data, onSave, onModify }: {
   data: TripJSON
   onSave: () => void
   onModify: () => void
 }) {
-  // Safely parse budget breakdown — AI sometimes returns strings like "¥3,500"
+  const [bookingModal, setBookingModal] = useState<BookingType | null>(null)
+
   const toNum = (v: unknown) => parseFloat(String(v).replace(/[^0-9.]/g, '')) || 0
   const numericBreakdown = Object.fromEntries(
     Object.entries(data.budget_breakdown_per_person_cny ?? {})
@@ -646,30 +798,42 @@ function TripResultCard({ data, onSave, onModify }: {
       .filter(([, v]) => (v as number) > 0)
   )
 
-  // Determine per-person budget — prefer breakdown total, then explicit fields
   const breakdownTotal = toNum(data.budget_breakdown_per_person_cny?.total_estimated ?? data.budget_breakdown_per_person_cny?.total ?? 0)
   const rawPerPerson = toNum(data.budget_per_person_cny ?? 0)
   const rawTotal = toNum(data.total_budget_cny ?? 0)
   const travelers = data.travelers ?? 1
 
-  // Pick the best per-person figure
   let perPerson = breakdownTotal || rawPerPerson || (rawTotal ? rawTotal / travelers : 0)
-
-  // Sanity check: if AI confused total vs per-person (ratio > 5x), auto-correct
   if (rawTotal > 0 && perPerson > 0 && rawTotal / perPerson > 5) {
     perPerson = Math.round(rawTotal / travelers)
   }
-
-  // totalBudget = what the user said their per-person budget is
   const totalBudget = rawPerPerson || (rawTotal ? rawTotal / travelers : perPerson) || 15000
+
+  // Check if per-day hotels are available (hide top-level hotel section if so)
+  const hasDailyHotels = data.daily_itinerary?.some(d => d.hotel_for_tonight?.name)
 
   return (
     <div className="w-full max-w-xl">
       <TripHeader data={data} />
+
+      {/* Booking action buttons */}
+      <div className="flex gap-2 mb-4 flex-wrap">
+        {[
+          { icon: '✈️', label: '订机票', type: 'flight' as BookingType },
+          { icon: '🏨', label: '订酒店', type: 'hotel' as BookingType },
+          { icon: '🍜', label: '订餐厅', type: 'restaurant' as BookingType },
+        ].map(btn => (
+          <button key={btn.type} onClick={() => setBookingModal(btn.type)}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-full bg-white border border-gray-200 hover:border-blue-400 hover:text-blue-600 transition-colors shadow-sm">
+            {btn.icon} {btn.label}
+          </button>
+        ))}
+      </div>
+
       <WeatherBanner data={data.weather_forecast} />
       {data.daily_itinerary && <DailyItinerary data={data} days={data.daily_itinerary} />}
-      <HotelCards hotels={data.hotel_search?.example_hotels} />
-      {data.restaurant_highlights && data.restaurant_highlights.length > 0 && (
+      {!hasDailyHotels && <HotelCards hotels={data.hotel_search?.example_hotels} />}
+      {!hasDailyHotels && data.restaurant_highlights && data.restaurant_highlights.length > 0 && (
         <RestaurantHighlights restaurants={data.restaurant_highlights} />
       )}
       {Object.keys(numericBreakdown).length > 0 && (
@@ -679,7 +843,7 @@ function TripResultCard({ data, onSave, onModify }: {
         <PackingTips tips={data.packing_tips} />
       )}
 
-      {/* Action buttons */}
+      {/* Save / Modify buttons */}
       <div className="flex gap-2 mt-2">
         <button onClick={onSave}
           className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl gradient-bg text-white text-xs font-semibold hover:opacity-90 transition-opacity shadow-md">
@@ -690,11 +854,15 @@ function TripResultCard({ data, onSave, onModify }: {
           <PenLine className="w-3.5 h-3.5" /> Modify Request
         </button>
       </div>
+
+      {bookingModal && (
+        <BookingModal type={bookingModal} trip={data} onClose={() => setBookingModal(null)} />
+      )}
     </div>
   )
 }
 
-// ─── Suggestions (kept for TripPlannerForm skip fallback) ────────────────────
+// ─── TypingDots ───────────────────────────────────────────────────────────────
 function TypingDots() {
   return (
     <div className="flex items-center gap-1 px-4 py-3">
@@ -706,11 +874,23 @@ function TypingDots() {
   )
 }
 
-// ─── ChatBubble ───────────────────────────────────────────────────────────────
-function ChatBubble({ msg, onModify }: { msg: Message; onModify: (text: string) => void }) {
-  const isUser = msg.role === 'user'
+// ─── Tool icons mapping ───────────────────────────────────────────────────────
+const TOOL_ICONS: Record<string, string> = {
+  search_weather: '🌤',
+  find_flights: '✈️',
+  find_hotels: '🏨',
+  find_restaurants: '🍜',
+  find_activities: '🗺️',
+}
 
-  // Try to parse trip JSON from content
+// ─── ChatBubble ───────────────────────────────────────────────────────────────
+function ChatBubble({ msg, onModify, onCalendarConfirm, onCalendarSkip }: {
+  msg: Message
+  onModify: (text: string) => void
+  onCalendarConfirm: (msg: Message) => void
+  onCalendarSkip: (id: string) => void
+}) {
+  const isUser = msg.role === 'user'
   const tripData = !isUser ? parseTripJSON(msg.content) : null
 
   const handleSave = async () => {
@@ -736,34 +916,78 @@ function ChatBubble({ msg, onModify }: { msg: Message; onModify: (text: string) 
         {isUser ? <User className="w-4 h-4 text-white" /> : <Bot className="w-4 h-4 text-blue-500" />}
       </div>
 
-      {tripData ? (
-        // Render structured trip card
-        <TripResultCard
-          data={tripData}
-          onSave={handleSave}
-          onModify={() => onModify(`Please help me modify this trip plan for ${tripData.destination}: `)}
-        />
-      ) : (
-        // Render normal markdown bubble
-        <div className={`max-w-[75%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
-          isUser ? 'gradient-bg text-white rounded-tr-sm' : 'bg-white border border-gray-100 shadow-sm text-gray-800 rounded-tl-sm'
-        }`}>
-          {isUser ? (
-            <p>{msg.content}</p>
-          ) : (
-            <div className="prose prose-sm max-w-none prose-p:my-1 prose-ul:my-1 prose-li:my-0.5">
-              <ReactMarkdown>{msg.content}</ReactMarkdown>
+      <div className="flex-1 min-w-0">
+        {/* Tool Steps Panel — shown before trip card for assistant messages */}
+        {!isUser && msg.tool_steps && msg.tool_steps.length > 0 && (
+          <div className="mb-3 bg-slate-50 border border-slate-200 rounded-xl p-3">
+            <p className="text-xs font-semibold text-slate-500 mb-2">🤖 Agent Actions</p>
+            {msg.tool_steps.map((step, i) => (
+              <div key={i} className="flex items-center gap-2 text-xs py-1 text-slate-700">
+                <span className="text-base leading-none">{TOOL_ICONS[step.tool] ?? '🔧'}</span>
+                <span className="flex-1">{step.summary}</span>
+                <span className={step.status === 'success' ? 'text-green-500 font-bold' : 'text-red-400 font-bold'}>
+                  {step.status === 'success' ? '✓' : '✗'}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {tripData ? (
+          <TripResultCard
+            data={tripData}
+            onSave={handleSave}
+            onModify={() => onModify(`Please help me modify this trip plan for ${tripData.destination}: `)}
+          />
+        ) : (
+          <div className={`max-w-[75%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
+            isUser ? 'gradient-bg text-white rounded-tr-sm ml-auto' : 'bg-white border border-gray-100 shadow-sm text-gray-800 rounded-tl-sm'
+          }`}>
+            {isUser ? (
+              <p>{msg.content}</p>
+            ) : (
+              <div className="prose prose-sm max-w-none prose-p:my-1 prose-ul:my-1 prose-li:my-0.5">
+                <ReactMarkdown>{msg.content}</ReactMarkdown>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Calendar Confirmation — shown below trip card */}
+        {!isUser && msg.calendar_events && msg.calendar_events.length > 0 && !msg.calendar_confirmed && (
+          <div className="mt-3 bg-blue-50 border border-blue-200 rounded-xl p-3 max-w-xl">
+            <p className="text-sm font-semibold text-blue-800 mb-1">
+              📅 已准备好 {msg.calendar_events.length} 个日历事件
+            </p>
+            <p className="text-xs text-blue-600 mb-3">
+              {msg.calendar_events[0]?.date} — {msg.calendar_events[msg.calendar_events.length - 1]?.date}
+              {' · '}可导入 Apple 日历、Google 日历等任意 App
+            </p>
+            <div className="flex gap-2">
+              <button onClick={() => onCalendarConfirm(msg)}
+                className="flex-1 py-2 rounded-lg bg-blue-500 text-white text-xs font-semibold hover:bg-blue-600 transition-colors">
+                加入日历
+              </button>
+              <button onClick={() => onCalendarSkip(msg.id)}
+                className="flex-1 py-2 rounded-lg bg-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-300 transition-colors">
+                跳过
+              </button>
             </div>
-          )}
-        </div>
-      )}
+          </div>
+        )}
+
+        {/* Show confirmed state */}
+        {!isUser && msg.calendar_confirmed && msg.calendar_events && msg.calendar_events.length > 0 && (
+          <p className="text-xs text-gray-400 mt-2">📅 日历事件已处理</p>
+        )}
+      </div>
     </div>
   )
 }
 
 // ─── ChatPanel (main export) ──────────────────────────────────────────────────
 export default function ChatPanel() {
-  const { messages, isLoading, threadId, addMessage, setLoading, setThreadId, clearChat } = useStore()
+  const { messages, isLoading, threadId, addMessage, updateMessage, setLoading, setThreadId, clearChat } = useStore()
   const [input, setInput] = useState('')
   const bottomRef = useRef<HTMLDivElement>(null)
 
@@ -782,7 +1006,7 @@ export default function ChatPanel() {
 
     try {
       const res = await chatApi.send(content, threadId ?? undefined)
-      const { reply, thread_id } = res.data
+      const { reply, thread_id, tool_steps, calendar_events } = res.data
       setThreadId(thread_id)
       const aiMsg: Message = {
         id: (Date.now() + 1).toString(),
@@ -790,6 +1014,8 @@ export default function ChatPanel() {
         content: reply,
         timestamp: new Date(),
         trip_plan: res.data.trip_plan as Message['trip_plan'],
+        tool_steps: tool_steps as Message['tool_steps'],
+        calendar_events: calendar_events as CalendarEvent[] | undefined,
       }
       addMessage(aiMsg)
     } catch {
@@ -797,6 +1023,28 @@ export default function ChatPanel() {
     } finally {
       setLoading(false)
     }
+  }
+
+  const handleCalendarConfirm = async (msg: Message) => {
+    if (!msg.calendar_events?.length) return
+    try {
+      const res = await calendarApi.generate(msg.calendar_events)
+      const blob = new Blob([res.data as BlobPart], { type: 'text/calendar' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'travel_plan.ics'
+      a.click()
+      URL.revokeObjectURL(url)
+      updateMessage(msg.id, { calendar_confirmed: true })
+      toast.success('日历文件已下载！导入到您的日历 App 即可')
+    } catch {
+      toast.error('Failed to generate calendar file')
+    }
+  }
+
+  const handleCalendarSkip = (id: string) => {
+    updateMessage(id, { calendar_confirmed: true })
   }
 
   return (
@@ -826,7 +1074,13 @@ export default function ChatPanel() {
         )}
 
         {messages.map((msg) => (
-          <ChatBubble key={msg.id} msg={msg} onModify={(text) => setInput(text)} />
+          <ChatBubble
+            key={msg.id}
+            msg={msg}
+            onModify={(text) => setInput(text)}
+            onCalendarConfirm={handleCalendarConfirm}
+            onCalendarSkip={handleCalendarSkip}
+          />
         ))}
 
         {isLoading && (

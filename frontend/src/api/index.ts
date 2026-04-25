@@ -28,7 +28,18 @@ export const authApi = {
 
 export const chatApi = {
   send: (message: string, thread_id?: string) =>
-    api.post<{ reply: string; thread_id: string; trip_plan: unknown }>('/chat', { message, thread_id }),
+    api.post<{
+      reply: string
+      thread_id: string
+      trip_plan: unknown
+      tool_steps?: Array<{ tool: string; status: string; summary: string; args?: unknown }>
+      calendar_events?: Array<{ date: string; time: string; title: string; description?: string }>
+    }>('/chat', { message, thread_id }),
+}
+
+export const calendarApi = {
+  generate: (events: Array<{ date: string; time: string; title: string; description?: string }>) =>
+    api.post('/calendar/generate', events, { responseType: 'blob' }),
 }
 
 export const tripsApi = {
