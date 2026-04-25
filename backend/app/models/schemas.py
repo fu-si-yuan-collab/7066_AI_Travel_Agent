@@ -124,3 +124,31 @@ class FlightSearchRequest(BaseModel):
     return_date: date | None = None
     passengers: int = 1
     cabin_class: str = "economy"
+
+
+# ─── 行为日志 / 反馈 ─────────────────────────────────────────────
+class InteractionEventIn(BaseModel):
+    """前端埋点事件。"""
+
+    session_id: str | None = None
+    event_type: str
+    item_type: str
+    item_id: str
+    item_title: str | None = None
+    destination: str | None = None
+    travel_style: str | None = None
+    budget: float | None = None
+    currency: str | None = None
+    metadata_json: dict | None = None
+
+
+class InteractionFeedbackIn(BaseModel):
+    """显式反馈事件。"""
+
+    session_id: str | None = None
+    item_type: str
+    item_id: str
+    item_title: str | None = None
+    destination: str | None = None
+    feedback: str = Field(description="like | dislike | not_relevant")
+    metadata_json: dict | None = None

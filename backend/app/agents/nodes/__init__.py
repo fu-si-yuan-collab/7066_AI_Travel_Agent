@@ -4,6 +4,7 @@ from app.agents.nodes.hotel_agent import hotel_node
 from app.agents.nodes.weather_agent import weather_node
 from app.agents.nodes.navigation_agent import navigation_node
 from app.agents.nodes.restaurant_agent import restaurant_node
+from app.agents.nodes.recommendation_agent import recommendation_node
 from app.agents.nodes.itinerary_agent import itinerary_node
 from app.agents.nodes.budget_agent import budget_node
 
@@ -14,6 +15,7 @@ __all__ = [
     "weather_node",
     "navigation_node",
     "restaurant_node",
+    "recommendation_node",
     "itinerary_node",
     "budget_node",
 ]

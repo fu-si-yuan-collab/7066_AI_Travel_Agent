@@ -61,6 +61,7 @@ class AgentState:
     # ── 生成的行程 ──
     itinerary: dict[str, Any] = field(default_factory=dict)        # 完整行程规划
     budget_breakdown: dict[str, Any] = field(default_factory=dict) # 预算分解
+    recommended_candidates: list[dict[str, Any]] = field(default_factory=list)  # baseline 推荐候选 Top-K
 
     # ── 错误追踪 ──
     errors: list[str] = field(default_factory=list)

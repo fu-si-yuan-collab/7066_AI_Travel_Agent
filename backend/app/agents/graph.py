@@ -44,6 +44,7 @@ from app.agents.nodes import (
     weather_node,
     navigation_node,
     restaurant_node,
+    recommendation_node,
     itinerary_node,
     budget_node,
 )
@@ -81,6 +82,7 @@ def build_graph(checkpointer=None):
     graph.add_node("weather_check", weather_node)
     graph.add_node("navigation", navigation_node)
     graph.add_node("restaurant_search", restaurant_node)   # 真实餐厅数据
+    graph.add_node("recommend_candidates", recommendation_node)  # baseline 个性化候选
     graph.add_node("plan_itinerary", itinerary_node)
     graph.add_node("analyze_budget", budget_node)
 
@@ -102,7 +104,8 @@ def build_graph(checkpointer=None):
     graph.add_edge("hotel_search", "weather_check")
     graph.add_edge("weather_check", "navigation")
     graph.add_edge("navigation", "restaurant_search")    # 搜索真实餐厅
-    graph.add_edge("restaurant_search", "plan_itinerary")
+    graph.add_edge("restaurant_search", "recommend_candidates")
+    graph.add_edge("recommend_candidates", "plan_itinerary")
     graph.add_edge("plan_itinerary", "analyze_budget")
     graph.add_edge("analyze_budget", END)
 

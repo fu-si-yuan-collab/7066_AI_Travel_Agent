@@ -13,8 +13,10 @@ from langchain_core.messages import HumanMessage
 from app.agents.graph import travel_agent_graph
 from app.core.security import get_current_user_id
 from app.db.database import get_db
+from app.db.repositories.interaction_repo import log_interaction_event
 from app.db.repositories.preference_repo import get_user_preferences
 from app.models.schemas import ChatRequest, ChatResponse
+from app.services.preference_learning import learn_from_interaction
 
 router = APIRouter()
 
@@ -55,6 +57,35 @@ async def chat(
 
     result = await travel_agent_graph.ainvoke(input_state, config=config)
 
+    # 记录聊天提交事件（数据闭环）
+    try:
+        await log_interaction_event(
+            db,
+            user_id,
+            event_type="chat_submit",
+            item_type="chat",
+            item_id=thread_id,
+            session_id=thread_id,
+            item_title=req.message[:120],
+            destination=str(result.get("travel_plan", {}).destination if result.get("travel_plan") else ""),
+            travel_style=prefs_dict.get("preferred_travel_style", ""),
+            budget=float(prefs_dict.get("daily_budget_high", 0) or 0),
+            currency=prefs_dict.get("currency", "CNY"),
+            metadata_json={"message_length": len(req.message)},
+        )
+        await learn_from_interaction(
+            db,
+            user_id=user_id,
+            event_type="chat_submit",
+            item_type="chat",
+            item_id=thread_id,
+            item_title=req.message[:120],
+            destination=str(result.get("travel_plan", {}).destination if result.get("travel_plan") else ""),
+            metadata_json={"travel_style": prefs_dict.get("preferred_travel_style", "")},
+        )
+    except Exception:
+        pass
+
     # 提取最后一条 AI 消息作为回复
     ai_messages = [m for m in result.get("messages", []) if hasattr(m, "content") and m.type == "ai"]
     last_content = ai_messages[-1].content if ai_messages else ""
@@ -63,10 +94,15 @@ async def chat(
     # 前端的 parseTripJSON() 会自动检测并渲染成卡片
     import json, re
     itinerary = result.get("itinerary", {})
+    recommended_candidates = result.get("recommended_candidates", [])
     if itinerary:
-        # itinerary 已经是 dict，直接序列化为 JSON 字符串返回
-        reply = json.dumps(itinerary, ensure_ascii=False)
-        trip_plan = itinerary
+        # 把 baseline Top-K 一并放入 trip_plan，前端可展示“个性化候选来源”
+        merged_trip_plan = {
+            **itinerary,
+            "recommended_candidates": recommended_candidates[:8],
+        }
+        reply = json.dumps(merged_trip_plan, ensure_ascii=False)
+        trip_plan = merged_trip_plan
     else:
         # 没有完整行程（信息不足，还在追问阶段）—— 返回自然语言回复
         # 尝试从最后一条消息里提取 JSON block（itinerary_agent 可能把 JSON 嵌在文字里）
@@ -86,6 +122,34 @@ async def chat(
         else:
             reply = last_content or "I'm sorry, I couldn't process that."
             trip_plan = None
+
+    try:
+        await log_interaction_event(
+            db,
+            user_id,
+            event_type="chat_response",
+            item_type="chat",
+            item_id=thread_id,
+            session_id=thread_id,
+            item_title=(reply or "")[:120],
+            destination=str((trip_plan or {}).get("destination", "") if isinstance(trip_plan, dict) else ""),
+            travel_style=prefs_dict.get("preferred_travel_style", ""),
+            budget=float(prefs_dict.get("daily_budget_high", 0) or 0),
+            currency=prefs_dict.get("currency", "CNY"),
+            metadata_json={"has_trip_plan": bool(trip_plan)},
+        )
+        await learn_from_interaction(
+            db,
+            user_id=user_id,
+            event_type="chat_response",
+            item_type="chat",
+            item_id=thread_id,
+            item_title=(reply or "")[:120],
+            destination=str((trip_plan or {}).get("destination", "") if isinstance(trip_plan, dict) else ""),
+            metadata_json={"travel_style": prefs_dict.get("preferred_travel_style", "")},
+        )
+    except Exception:
+        pass
 
     return ChatResponse(
         reply=reply,

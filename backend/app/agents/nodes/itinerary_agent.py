@@ -40,6 +40,7 @@ async def itinerary_node(state: AgentState) -> dict:
         "weather": state.weather_data,
         "restaurants": [a for a in state.activity_results if a.get("category") == "restaurant"][:6],
         "attractions": [a for a in state.activity_results if a.get("category") != "restaurant"][:6],
+        "recommended_candidates": state.recommended_candidates[:10],
         "navigation": state.navigation_data,
         "user_preferences": state.user_preferences,
     }
