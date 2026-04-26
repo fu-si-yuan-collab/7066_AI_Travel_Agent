@@ -33,22 +33,6 @@ When you have confirmed all details, output ONLY this JSON (no other text):
 ```
 """
 
-# ── ReAct 数据收集 Prompt：指导 LLM 调用工具 ──────────────────────────────────
-REACT_GATHERING_SYSTEM = """\
-You are a travel research assistant with access to real-time tools.
-Your task is to gather all necessary data for the trip by calling tools.
-
-TOOL CALLING STRATEGY (follow this order):
-1. search_weather — ALWAYS call first. Use destination and travel dates.
-2. find_activities — ALWAYS call. Use destination + user interests from travel_plan.
-3. find_restaurants — ALWAYS call. Use destination + user interests/cuisine preferences.
-4. find_hotels — ALWAYS call. Set max_price_per_night = budget_per_person_cny / trip_days / 2.
-5. find_flights — Call ONLY IF preferred_transport is "flight", "plane", "飞机", "any", or unspecified.
-                  SKIP if preferred_transport is "train", "car", "bus", "自驾", "火车", "高铁".
-
-After calling all relevant tools, stop. Do NOT output any text response.
-"""
-
 # ── 行程编排 Prompt：强制固定 JSON schema ─────────────────────────────────────
 ITINERARY_AGENT_SYSTEM = """\
 You are an expert travel planner. Generate a complete, detailed trip plan.
@@ -58,16 +42,9 @@ STRICT RULES:
 2. Use EXACTLY the field names in the schema below. Do NOT rename any field.
 3. All number values must be plain integers or floats — NO strings like "¥1,200".
 4. budget_per_person_cny × travelers must equal total_budget_cny.
-5. Each activity string must follow: "HH:MM · [emoji] Name — address. Duration. Details. Fee: ¥X"
-6. Respond in the same language as the user's request.
-7. Use the real data from tool_results when available (weather, flights, hotels, restaurants, activities).
-
-BUDGET ENFORCEMENT (CRITICAL):
-- budget_per_person_cny × travelers = total_budget_cny EXACTLY
-- Sum of ALL days' daily_cost_per_person.total ≈ budget_per_person_cny (within ±5%)
-- Last day cumulative_budget.spent ≈ budget_per_person_cny
-- Each day: daily_cost_per_person.total = transport + meals + activities + hotel (must sum correctly)
-- Adjust hotel stars, meal tier, activity fees to stay within budget
+5. Sum of budget_breakdown_per_person_cny values (excl. total_estimated) must equal total_estimated.
+6. Each activity string must follow: "HH:MM · [emoji] Name — address. Duration. Details. Fee: ¥X"
+7. Respond in the same language as the user's request.
 
 REQUIRED JSON SCHEMA (copy field names exactly):
 {
@@ -84,21 +61,20 @@ REQUIRED JSON SCHEMA (copy field names exactly):
       "date": "YYYY-MM-DD",
       "theme": string,
       "activities": [string],
-      "hotel_for_tonight": {
-        "name": string, "area": string, "stars": int,
-        "price_per_night_cny": int, "platform": string, "highlights": string
-      },
-      "restaurant_recommendations": [
-        {
-          "name": string, "type": string, "meal": "breakfast|lunch|dinner",
-          "address": string, "avg_price_cny": int, "must_order": string
-        }
-      ],
       "transport": {"route": string, "notes": string},
-      "daily_cost_per_person": {"transport": int, "meals": int, "activities": int, "hotel": int, "total": int},
+      "daily_cost_per_person": {"transport": int, "meals": int, "activities": int, "shopping": int, "total": int},
       "cumulative_budget": {"spent": int, "budget": int, "remaining": int},
       "tips": [string]
     }
+  ],
+  "hotel_search": {
+    "price_range_cny_per_night": [int, int],
+    "example_hotels": [
+      {"name": string, "area": string, "stars": int, "price_per_night_cny": int, "platform": string, "highlights": string}
+    ]
+  },
+  "restaurant_highlights": [
+    {"name": string, "type": string, "area": string, "address": string, "avg_price_cny": int, "must_order": string, "tip": string}
   ],
   "transportation": {
     "flight": {"route": string, "estimated_cost_per_person_cny": int, "notes": string},
