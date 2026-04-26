@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { MapPin, Calendar, Wallet, Heart, Hotel, Navigation, ChevronRight, Sparkles } from 'lucide-react'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -80,22 +80,6 @@ export default function TripPlannerForm({ onSubmit, isLoading }: Props) {
 
   const set = (k: keyof TripFormData, v: string | string[]) =>
     setForm(f => ({ ...f, [k]: v }))
-
-  // Auto-detect user location to pre-fill origin field
-  useEffect(() => {
-    if (!form.origin && navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(async (pos) => {
-        try {
-          const res = await fetch(
-            `https://nominatim.openstreetmap.org/reverse?lat=${pos.coords.latitude}&lon=${pos.coords.longitude}&format=json&accept-language=zh`
-          )
-          const data = await res.json()
-          const city = data.address?.city || data.address?.town || data.address?.county || ''
-          if (city) set('origin', city)
-        } catch { /* silent fail */ }
-      }, () => { /* permission denied – silent fail */ })
-    }
-  }, [])
 
   const toggleInterest = (id: string) =>
     set('interests', form.interests.includes(id)

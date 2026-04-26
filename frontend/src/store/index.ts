@@ -13,7 +13,6 @@ interface AppStore {
   threadId: string | null
   isLoading: boolean
   addMessage: (msg: Message) => void
-  updateMessage: (id: string, patch: Partial<Message>) => void
   setLoading: (v: boolean) => void
   setThreadId: (id: string) => void
   clearChat: () => void
@@ -44,9 +43,6 @@ export const useStore = create<AppStore>()(
       threadId: null,
       isLoading: false,
       addMessage: (msg) => set((s) => ({ messages: [...s.messages, msg] })),
-      updateMessage: (id, patch) => set((s) => ({
-        messages: s.messages.map((m) => m.id === id ? { ...m, ...patch } : m),
-      })),
       setLoading: (v) => set({ isLoading: v }),
       setThreadId: (id) => set({ threadId: id }),
       clearChat: () => set({ messages: [], threadId: null }),

@@ -103,8 +103,6 @@ class ChatResponse(BaseModel):
     reply: str                              # AI 回复
     thread_id: str                          # 会话 ID
     trip_plan: dict | None = None           # 结构化行程（如果已生成）
-    tool_steps: list[dict] | None = None    # ReAct 工具调用记录
-    calendar_events: list[dict] | None = None  # 可导入日历的事件列表
 
 
 # ─── 酒店/机票搜索 ────────────────────────────────────────────
