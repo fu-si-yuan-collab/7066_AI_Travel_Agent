@@ -103,8 +103,6 @@ class ChatResponse(BaseModel):
     reply: str                              # AI 回复
     thread_id: str                          # 会话 ID
     trip_plan: dict | None = None           # 结构化行程（如果已生成）
-    tool_steps: list[dict] | None = None    # ReAct 工具调用记录
-    calendar_events: list[dict] | None = None  # 可导入日历的事件列表
 
 
 # ─── 酒店/机票搜索 ────────────────────────────────────────────
@@ -126,3 +124,34 @@ class FlightSearchRequest(BaseModel):
     return_date: date | None = None
     passengers: int = 1
     cabin_class: str = "economy"
+
+
+# ─── 行为日志 / 反馈 ─────────────────────────────────────────────
+class InteractionEventIn(BaseModel):
+    """前端埋点事件。"""
+
+    session_id: str | None = None
+    event_type: str
+    item_type: str
+    item_id: str
+    item_title: str | None = None
+    destination: str | None = None
+    travel_style: str | None = None
+    budget: float | None = None
+    currency: str | None = None
+    rank_position: int | None = None
+    dwell_ms: int | None = None
+    source_channel: str | None = None
+    metadata_json: dict | None = None
+
+
+class InteractionFeedbackIn(BaseModel):
+    """显式反馈事件。"""
+
+    session_id: str | None = None
+    item_type: str
+    item_id: str
+    item_title: str | None = None
+    destination: str | None = None
+    feedback: str = Field(description="like | dislike | not_relevant")
+    metadata_json: dict | None = None

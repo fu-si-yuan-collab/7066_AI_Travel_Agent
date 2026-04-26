@@ -12,6 +12,7 @@ from app.core.security import get_current_user_id
 from app.db.database import get_db
 from app.db.repositories.preference_repo import get_user_preferences, upsert_preferences
 from app.models.schemas import PreferenceOut, PreferenceUpdate
+from app.services.preference_learning import learn_from_explicit_preferences
 
 router = APIRouter()
 
@@ -32,4 +33,14 @@ async def update_prefs(
     db: AsyncSession = Depends(get_db),
 ):
     """创建或更新用户偏好（不存在则创建，已存在则更新非空字段）。"""
-    return await upsert_preferences(db, user_id, body)
+    updated = await upsert_preferences(db, user_id, body)
+    try:
+        await learn_from_explicit_preferences(
+            db,
+            user_id=user_id,
+            pref_update=body.model_dump(exclude_none=True),
+        )
+        await db.refresh(updated)
+    except Exception:
+        pass
+    return updated

@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.db.database import init_db
-from app.api.routes import chat, trips, users, preferences
+from app.api.routes import chat, trips, users, preferences, interactions
 from app.api.routes.calendar import router as calendar_router
 
 
@@ -48,6 +48,7 @@ app.include_router(chat.router, prefix="/api/v1/chat", tags=["Chat"])
 app.include_router(trips.router, prefix="/api/v1/trips", tags=["Trips"])
 app.include_router(users.router, prefix="/api/v1/users", tags=["Users"])
 app.include_router(preferences.router, prefix="/api/v1/preferences", tags=["Preferences"])
+app.include_router(interactions.router, prefix="/api/v1/interactions", tags=["Interactions"])
 app.include_router(calendar_router, prefix="/api/v1/calendar", tags=["Calendar"])
 
 
